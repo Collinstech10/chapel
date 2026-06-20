@@ -1,0 +1,669 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// PHASE 0 — FOUNDATION: Multi-tenancy, Auth, RBAC, Audit
+// ============================================================================
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches Branch[]
+  roles    Role[]
+
+  @@map("organizations")
+}
+
+model Branch {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  isHeadquarters Boolean  @default(false)
+  address        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  users           User[]
+  members         Member[]
+  services        Service[]
+  events          Event[]
+  announcements   Announcement[]
+  transactions    Transaction[]
+  expenses        Expense[]
+  assets          Asset[]
+  departments     Department[]
+  cellFellowships CellFellowship[]
+  workers         Worker[]
+  sermons         Sermon[]
+  devotionals     Devotional[]
+  prayerRequests  PrayerRequest[]
+  counseling      CounselingSession[]
+  libraryItems    LibraryItem[]
+  certificates    Certificate[]
+
+  @@index([organizationId])
+  @@map("branches")
+}
+
+model User {
+  id               String       @id @default(cuid())
+  branchId         String
+  branch           Branch       @relation(fields: [branchId], references: [id])
+  email            String?      @unique
+  phone            String?      @unique
+  passwordHash     String?
+  authProvider     AuthProvider @default(LOCAL)
+  isEmailVerified  Boolean      @default(false)
+  isPhoneVerified  Boolean      @default(false)
+  twoFactorEnabled Boolean      @default(false)
+  status           UserStatus   @default(ACTIVE)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  member    Member?
+  userRoles UserRole[]
+  sessions  Session[]
+  auditLogs AuditLog[]
+
+  @@index([branchId])
+  @@map("users")
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  OTP
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  deviceInfo String?
+  ipAddress  String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Role {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String // SUPER_ADMIN | CHAPEL_ADMIN | PASTOR | MINISTER | DEPT_LEADER | WORKER | MEMBER
+  description    String?
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  key         String @unique // e.g. "members:read", "finance:write"
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id])
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId   String
+  user     User   @relation(fields: [userId], references: [id])
+  roleId   String
+  role     Role   @relation(fields: [roleId], references: [id])
+  branchId String // role is scoped to a specific branch
+
+  @@id([userId, roleId, branchId])
+  @@map("user_roles")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String // e.g. "member.update", "finance.create"
+  entity    String
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// PHASE 1 — CORE MVP: Members, Attendance, Events, Communication, Basic Finance
+// ============================================================================
+
+model Member {
+  id       String  @id @default(cuid())
+  userId   String? @unique
+  user     User?   @relation(fields: [userId], references: [id])
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+
+  fullName          String
+  gender            Gender?
+  dateOfBirth       DateTime?
+  maritalStatus     String?
+  phone             String?
+  email             String?
+  profilePictureUrl String?
+  qrCode            String  @unique
+
+  // Academic (university chapels)
+  matricNumber    String?
+  department      String?
+  faculty         String?
+  level           String?
+  hallOfResidence String?
+
+  // Spiritual
+  dateJoined         DateTime?
+  baptismStatus      String?
+  isWorker           Boolean  @default(false)
+  membershipCategory String?
+  mentorId           String?
+
+  // Emergency contact
+  emergencyContactName     String?
+  emergencyContactRelation String?
+  emergencyContactPhone    String?
+
+  status    MemberStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  attendanceRecords     AttendanceRecord[]
+  eventRegistrations    EventRegistration[]
+  transactions          Transaction[]
+  departmentMemberships DepartmentMember[]
+  cellMemberships       CellFellowshipMember[]
+  prayerRequests        PrayerRequest[]
+  counselingSessions    CounselingSession[]
+  certificates          Certificate[]
+  worker                Worker?
+
+  @@index([branchId])
+  @@map("members")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  TRANSFERRED
+}
+
+model Service {
+  id        String   @id @default(cuid())
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id])
+  name      String // Sunday Service, Midweek, Bible Study, Vigil, etc.
+  category  String
+  date      DateTime
+  createdAt DateTime @default(now())
+
+  attendanceRecords AttendanceRecord[]
+
+  @@index([branchId, date])
+  @@map("services")
+}
+
+model AttendanceRecord {
+  id        String           @id @default(cuid())
+  memberId  String
+  member    Member           @relation(fields: [memberId], references: [id])
+  serviceId String
+  service   Service          @relation(fields: [serviceId], references: [id])
+  method    AttendanceMethod @default(QR)
+  timeIn    DateTime         @default(now())
+
+  @@unique([memberId, serviceId])
+  @@map("attendance_records")
+}
+
+enum AttendanceMethod {
+  QR
+  MANUAL
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  branchId    String
+  branch      Branch    @relation(fields: [branchId], references: [id])
+  title       String
+  theme       String?
+  description String?
+  speaker     String?
+  venue       String?
+  startDate   DateTime
+  endDate     DateTime?
+  capacity    Int?
+  createdAt   DateTime  @default(now())
+
+  registrations EventRegistration[]
+
+  @@index([branchId, startDate])
+  @@map("events")
+}
+
+model EventRegistration {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id])
+  memberId  String
+  member    Member   @relation(fields: [memberId], references: [id])
+  qrTicket  String   @unique
+  attended  Boolean  @default(false)
+  feedback  String?
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, memberId])
+  @@map("event_registrations")
+}
+
+model Announcement {
+  id          String    @id @default(cuid())
+  branchId    String
+  branch      Branch    @relation(fields: [branchId], references: [id])
+  title       String
+  body        String
+  channels    String[] // ["email","sms","push","in_app"]
+  targetGroup Json? // { department, gender, level, role }
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([branchId])
+  @@map("announcements")
+}
+
+model Transaction {
+  id        String            @id @default(cuid())
+  branchId  String
+  branch    Branch            @relation(fields: [branchId], references: [id])
+  memberId  String?
+  member    Member?           @relation(fields: [memberId], references: [id])
+  type      TransactionType
+  amount    Decimal           @db.Decimal(12, 2)
+  method    String // bank_transfer | flutterwave | paystack | stripe
+  reference String?           @unique
+  status    TransactionStatus @default(PENDING)
+  createdAt DateTime          @default(now())
+
+  @@index([branchId, createdAt])
+  @@map("transactions")
+}
+
+enum TransactionType {
+  TITHE
+  OFFERING
+  DONATION
+  THANKSGIVING
+  BUILDING_PROJECT
+  WELFARE
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+// ============================================================================
+// PHASE 2 — MINISTRY OPERATIONS: Departments, Cells, Discipleship, Workers,
+// Prayer/Counseling, Sermons/Devotionals
+// ============================================================================
+
+model Department {
+  id       String  @id @default(cuid())
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+  name     String
+  leaderId String?
+
+  members DepartmentMember[]
+
+  @@map("departments")
+}
+
+model DepartmentMember {
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  memberId     String
+  member       Member     @relation(fields: [memberId], references: [id])
+  joinedAt     DateTime   @default(now())
+
+  @@id([departmentId, memberId])
+  @@map("department_members")
+}
+
+model CellFellowship {
+  id           String  @id @default(cuid())
+  branchId     String
+  branch       Branch  @relation(fields: [branchId], references: [id])
+  name         String
+  leaderId     String?
+  meetingVenue String?
+  meetingDay   String?
+
+  members CellFellowshipMember[]
+
+  @@map("cell_fellowships")
+}
+
+model CellFellowshipMember {
+  cellId   String
+  cell     CellFellowship @relation(fields: [cellId], references: [id])
+  memberId String
+  member   Member         @relation(fields: [memberId], references: [id])
+  joinedAt DateTime       @default(now())
+
+  @@id([cellId, memberId])
+  @@map("cell_fellowship_members")
+}
+
+model DiscipleshipTrack {
+  id          String @id @default(cuid())
+  name        String // New Converts | Baptism Class | Foundation School | Workers Training | Leadership Training
+  description String?
+
+  enrollments DiscipleshipEnrollment[]
+
+  @@map("discipleship_tracks")
+}
+
+model DiscipleshipEnrollment {
+  id         String            @id @default(cuid())
+  trackId    String
+  track      DiscipleshipTrack @relation(fields: [trackId], references: [id])
+  memberId   String
+  mentorId   String?
+  progress   Int               @default(0) // percentage
+  completed  Boolean           @default(false)
+  completedAt DateTime?
+  createdAt  DateTime          @default(now())
+
+  @@map("discipleship_enrollments")
+}
+
+model Worker {
+  id         String       @id @default(cuid())
+  memberId   String       @unique
+  member     Member       @relation(fields: [memberId], references: [id])
+  branchId   String
+  branch     Branch       @relation(fields: [branchId], references: [id])
+  category   WorkerCategory
+  skills     String[]
+  dateJoined DateTime     @default(now())
+  status     WorkerStatus @default(ACTIVE)
+
+  dutyAssignments DutyAssignment[]
+
+  @@map("workers")
+}
+
+enum WorkerCategory {
+  PASTOR
+  MINISTER
+  WORKER
+  VOLUNTEER
+}
+
+enum WorkerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model DutyRoster {
+  id        String   @id @default(cuid())
+  branchId  String
+  title     String
+  weekStart DateTime
+
+  assignments DutyAssignment[]
+
+  @@map("duty_rosters")
+}
+
+model DutyAssignment {
+  id        String     @id @default(cuid())
+  rosterId  String
+  roster    DutyRoster @relation(fields: [rosterId], references: [id])
+  workerId  String
+  worker    Worker     @relation(fields: [workerId], references: [id])
+  role      String
+  confirmed Boolean    @default(false)
+
+  @@map("duty_assignments")
+}
+
+model PrayerRequest {
+  id        String              @id @default(cuid())
+  branchId  String
+  branch    Branch              @relation(fields: [branchId], references: [id])
+  memberId  String
+  member    Member              @relation(fields: [memberId], references: [id])
+  content   String
+  isTestimony Boolean           @default(false)
+  status    PrayerRequestStatus @default(SUBMITTED)
+  assignedTeam String?
+  createdAt DateTime            @default(now())
+
+  @@map("prayer_requests")
+}
+
+enum PrayerRequestStatus {
+  SUBMITTED
+  IN_PROGRESS
+  ANSWERED
+  ARCHIVED
+}
+
+model CounselingSession {
+  id          String          @id @default(cuid())
+  branchId    String
+  branch      Branch          @relation(fields: [branchId], references: [id])
+  memberId    String
+  member      Member          @relation(fields: [memberId], references: [id])
+  type        CounselingType
+  counselorId String?
+  scheduledAt DateTime?
+  notes       String? // confidential — encrypt at application layer
+  status      CounselingStatus @default(REQUESTED)
+  createdAt   DateTime        @default(now())
+
+  @@map("counseling_sessions")
+}
+
+enum CounselingType {
+  ACADEMIC
+  RELATIONSHIP
+  CAREER
+  SPIRITUAL
+}
+
+enum CounselingStatus {
+  REQUESTED
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+model Sermon {
+  id         String   @id @default(cuid())
+  branchId   String
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  title      String
+  speaker    String?
+  series     String?
+  topic      String?
+  audioUrl   String?
+  videoUrl   String?
+  notesUrl   String?
+  downloads  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@map("sermons")
+}
+
+model Devotional {
+  id            String   @id @default(cuid())
+  branchId      String
+  branch        Branch   @relation(fields: [branchId], references: [id])
+  date          DateTime
+  passage       String
+  reflection    String
+  prayerPoint   String?
+  createdAt     DateTime @default(now())
+
+  @@unique([branchId, date])
+  @@map("devotionals")
+}
+
+model BibleReadingPlan {
+  id        String @id @default(cuid())
+  name      String // 30-day | 90-day | One-year
+  durationDays Int
+
+  entries BibleReadingEntry[]
+
+  @@map("bible_reading_plans")
+}
+
+model BibleReadingEntry {
+  id        String           @id @default(cuid())
+  planId    String
+  plan      BibleReadingPlan @relation(fields: [planId], references: [id])
+  dayNumber Int
+  passage   String
+
+  @@map("bible_reading_entries")
+}
+
+// ============================================================================
+// PHASE 3 — FINANCE & ASSETS: Expenses, Assets, Inventory, Library
+// ============================================================================
+
+model Expense {
+  id         String   @id @default(cuid())
+  branchId   String
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  category   String // utilities | welfare | salaries | equipment | events
+  amount     Decimal  @db.Decimal(12, 2)
+  receiptUrl String?
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@map("expenses")
+}
+
+model Asset {
+  id           String    @id @default(cuid())
+  branchId     String
+  branch       Branch    @relation(fields: [branchId], references: [id])
+  name         String
+  category     String
+  condition    String?
+  purchaseDate DateTime?
+  lastMaintained DateTime?
+
+  @@map("assets")
+}
+
+model LibraryItem {
+  id        String   @id @default(cuid())
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id])
+  title     String
+  type      String // book | pdf | sermon | manual
+  category  String?
+  fileUrl   String?
+  downloads Int      @default(0)
+
+  @@map("library_items")
+}
+
+// ============================================================================
+// PHASE 4 — REPORTS, DOCUMENTS, CERTIFICATES
+// (Reports are computed via aggregation queries — no dedicated tables)
+// ============================================================================
+
+model Certificate {
+  id           String   @id @default(cuid())
+  branchId     String
+  branch       Branch   @relation(fields: [branchId], references: [id])
+  memberId     String
+  member       Member   @relation(fields: [memberId], references: [id])
+  type         String // baptism | foundation_school | workers_training
+  serialNumber String   @unique
+  qrVerifyCode String   @unique
+  issuedAt     DateTime @default(now())
+
+  @@map("certificates")
+}
+
+model DocumentRecord {
+  id        String   @id @default(cuid())
+  branchId  String
+  title     String
+  category  String // certificate | meeting_minutes | constitution | policy
+  fileUrl   String
+  createdAt DateTime @default(now())
+
+  @@map("document_records")
+}
+
+// ============================================================================
+// PHASE 5 — AI module has no persisted schema beyond conversation logs
+// ============================================================================
+
+model AiChatLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  query     String
+  response  String
+  createdAt DateTime @default(now())
+
+  @@map("ai_chat_logs")
+}

@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chapelflow
+      POSTGRES_PASSWORD: chapelflow
+      POSTGRES_DB: chapelflow_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - chapelflow_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  chapelflow_pgdata:
